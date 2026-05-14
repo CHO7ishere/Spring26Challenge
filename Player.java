@@ -1,376 +1,314 @@
 import java.util.*;
+import java.io.*;
 
-class Player {
-
-    static final int MAX_TURNS = 300;
-    static int turn = 0;
-    static int width, height;
-    static int myShackX, myShackY, oppShackX, oppShackY;
-    static int[][] grid; // 0=grass, 1=myShack, 2=oppShack, 3=water, 4=rock, 5=iron
-
-    static int[] myInv = new int[6]; // plum,lemon,apple,banana,iron,wood
-    static int[] oppInv = new int[6];
-
-    static List<int[]> trees = new ArrayList<>();
-    // tree: [type, x, y, size, health, fruits, cooldown]
-    static List<int[]> myTrolls = new ArrayList<>();
-    static List<int[]> oppTrolls = new ArrayList<>();
-    // troll: [id, x, y, moveSpeed, carryCap, harvestPow, chopPow, cPlum, cLemon, cApple, cBanana, cIron, cWood]
-
+public class Player {
 
     public static void main(String[] args) {
-        Scanner in = new Scanner(System.in);
-        width = in.nextInt(); height = in.nextInt(); in.nextLine();
-        grid = new int[height][width];
-        for (int y = 0; y < height; y++) {
-            String line = in.nextLine();
-            for (int x = 0; x < width; x++) {
-                char c = line.charAt(x);
-                if (c == '0') { grid[y][x] = 1; myShackX = x; myShackY = y; }
-                else if (c == '1') { grid[y][x] = 2; oppShackX = x; oppShackY = y; }
-                else if (c == '~') { grid[y][x] = 3; }
-                else if (c == '#') { grid[y][x] = 4; }
-                else if (c == '+') { grid[y][x] = 5; }
-            }
+        new Player().run();
+    }
+
+    private BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+
+    // Game state
+    private int width;
+    private int height;
+    private String[] map;
+
+    private int myPlums, myLemons, myApples, myBananas, myIron, myWood;
+    private int oppPlums, oppLemons, oppApples, oppBananas, oppIron, oppWood;
+
+    private List<Tree> trees = new ArrayList<>();
+    private List<Troll> myTrolls = new ArrayList<>();
+    private List<Troll> oppTrolls = new ArrayList<>();
+
+    private int turn = 0;
+    private boolean dumpScenarios = false;
+    private String scenarioDir = "scenarii";
+
+    public void run() {
+        // Check for dump mode
+        String dumpMode = System.getenv("DUMP_SCENARIOS");
+        if (dumpMode != null && dumpMode.equals("1")) {
+            dumpScenarios = true;
+            new File(scenarioDir).mkdirs();
         }
 
+        // Read initial input
+        readInitialInput();
+
+        // Dump initial state if enabled
+        if (dumpScenarios) dumpScenario("initial");
+
+        // Game loop
         while (true) {
+            // Read turn input
+            readTurnInput();
+
+            // Dump turn state if enabled
+            if (dumpScenarios) dumpScenario("turn_" + turn);
+
+            // Compute output
+            String output = computeOutput();
+
+            // Write output
+            System.out.println(output);
+
             turn++;
-            trees.clear(); myTrolls.clear(); oppTrolls.clear();
-
-            for (int i = 0; i < 6; i++) myInv[i] = in.nextInt();
-            for (int i = 0; i < 6; i++) oppInv[i] = in.nextInt();
-
-            int tc = in.nextInt();
-            for (int i = 0; i < tc; i++) {
-                String t = in.next();
-                int type = t.equals("PLUM") ? 0 : t.equals("LEMON") ? 1 : t.equals("APPLE") ? 2 : 3;
-                trees.add(new int[]{type, in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt()});
-            }
-
-            int trc = in.nextInt();
-            for (int i = 0; i < trc; i++) {
-                int id = in.nextInt(); int pl = in.nextInt();
-                int[] tr = new int[]{id, in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(),
-                        in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt(), in.nextInt()};
-                if (pl == 0) myTrolls.add(tr); else oppTrolls.add(tr);
-            }
-
-            List<String> cmds = new ArrayList<>();
-            int remaining = MAX_TURNS - turn;
-
-            // --- TRAIN decision ---
-            tryTrain(cmds, remaining);
-
-            // --- Per-troll assignment ---
-            // Sort: carrying trolls first so they drop/return before we assign idle ones
-            myTrolls.sort((a, b) -> totalCarried(b) - totalCarried(a));
-
-            // Track cells occupied/claimed by our trolls to avoid collisions
-            Set<String> occupiedCells = new HashSet<>();
-            for (int[] tr : myTrolls) occupiedCells.add(tr[1] + "," + tr[2]);
-            int plantersThisTurn = 0;
-
-            for (int[] tr : myTrolls) {
-                String cmd = decideTrollAction(tr, remaining, occupiedCells, plantersThisTurn);
-                if (cmd != null) {
-                    cmds.add(cmd);
-                    if (cmd.startsWith("PICK") || cmd.startsWith("PLANT")) plantersThisTurn++;
-                    // Update occupied: troll moves from current pos to target
-                    if (cmd.startsWith("MOVE")) {
-                        String[] parts = cmd.split(" ");
-                        occupiedCells.remove(tr[1] + "," + tr[2]);
-                        occupiedCells.add(parts[2] + "," + parts[3]);
-                    }
-                }
-            }
-
-            System.out.println(cmds.isEmpty() ? "WAIT" : String.join(";", cmds));
         }
     }
 
-    static int totalCarried(int[] tr) { return tr[7] + tr[8] + tr[9] + tr[10] + tr[11] + tr[12]; }
-    static int remainCap(int[] tr) { return tr[4] - totalCarried(tr); }
-    static int dist(int x1, int y1, int x2, int y2) { return Math.abs(x1-x2) + Math.abs(y1-y2); }
-    static int distToShack(int x, int y) { return dist(x, y, myShackX, myShackY); }
-    static boolean adjToShack(int x, int y) { return dist(x, y, myShackX, myShackY) == 1; }
+    private void dumpScenario(String prefix) {
+        try {
+            String filename = scenarioDir + "/" + prefix + "_" + System.currentTimeMillis() + ".txt";
+            PrintWriter writer = new PrintWriter(new FileWriter(filename));
 
-    static int[] treeAt(int x, int y) {
-        for (int[] t : trees) if (t[1] == x && t[2] == y) return t;
-        return null;
-    }
-
-    static boolean hasTreeAt(int x, int y) { return treeAt(x, y) != null; }
-
-    static int trainCost(int numTrolls, int attr) { return numTrolls + attr * attr; }
-
-    static void tryTrain(List<String> cmds, int remaining) {
-        // Loop to train multiple trolls per turn if affordable
-        while (true) {
-            int n = myTrolls.size() + cmds.size(); // count pending trains
-            if (remaining < 30) return;
-            if (n >= 4) return;
-
-            int[][] configs = {{2,1,1,0}, {2,2,1,0}, {1,2,1,0}, {1,1,1,0}};
-            int[] bestCfg = null;
-            double bestScore = -1;
-
-            for (int[] cfg : configs) {
-                int pCost = trainCost(n, cfg[0]);
-                int lCost = trainCost(n, cfg[1]);
-                int aCost = trainCost(n, cfg[2]);
-                int iCost = trainCost(n, cfg[3]);
-                if (myInv[0] < pCost || myInv[1] < lCost || myInv[2] < aCost || myInv[4] < iCost) continue;
-
-                int totalCost = pCost + lCost + aCost + iCost;
-
-                if (turn <= 15) {
-                    double score = cfg[0] * 3.0 + cfg[1] + cfg[2];
-                    if (score > bestScore) { bestScore = score; bestCfg = cfg; }
-                    continue;
-                }
-
-                double avgDist = avgTreeDistToShack();
-                if (avgDist < 1) avgDist = 4;
-                double cycleTime = 2.0 * avgDist / cfg[0] + 2;
-                double cyclesLeft = remaining / cycleTime;
-                double expectedFruits = cyclesLeft * Math.min(cfg[1], cfg[2]);
-                if (expectedFruits > totalCost * 1.2) {
-                    double score = expectedFruits - totalCost;
-                    if (score > bestScore) { bestScore = score; bestCfg = cfg; }
-                }
+            // Write map
+            writer.println(width + " " + height);
+            for (String row : map) {
+                writer.println(row);
             }
 
-            if (bestCfg == null) return;
-            int pCost = trainCost(n, bestCfg[0]);
-            int lCost = trainCost(n, bestCfg[1]);
-            int aCost = trainCost(n, bestCfg[2]);
-            int iCost = trainCost(n, bestCfg[3]);
-            cmds.add("TRAIN " + bestCfg[0] + " " + bestCfg[1] + " " + bestCfg[2] + " " + bestCfg[3]);
-            myInv[0] -= pCost; myInv[1] -= lCost; myInv[2] -= aCost; myInv[4] -= iCost;
-            System.err.println("T" + turn + " TRAIN " + bestCfg[0] + "," + bestCfg[1] + "," + bestCfg[2] + "," + bestCfg[3]);
+            // Write inventories
+            writer.println(myPlums + " " + myLemons + " " + myApples + " " + myBananas + " " + myIron + " " + myWood);
+            writer.println(oppPlums + " " + oppLemons + " " + oppApples + " " + oppBananas + " " + oppIron + " " + oppWood);
+
+            // Write trees
+            writer.println(trees.size());
+            for (Tree t : trees) {
+                writer.println(t.type + " " + t.x + " " + t.y + " " + t.size + " " + t.health + " " + t.fruits + " " + t.cooldown);
+            }
+
+            // Write trolls
+            int totalTrolls = myTrolls.size() + oppTrolls.size();
+            writer.println(totalTrolls);
+            for (Troll t : myTrolls) {
+                writer.println(t.id + " 0 " + t.x + " " + t.y + " " + t.movementSpeed + " " + t.carryCapacity + " " + t.harvestPower + " " + t.chopPower + " " + t.carryPlum + " " + t.carryLemon + " " + t.carryApple + " " + t.carryBanana + " " + t.carryIron + " " + t.carryWood);
+            }
+            for (Troll t : oppTrolls) {
+                writer.println(t.id + " 1 " + t.x + " " + t.y + " " + t.movementSpeed + " " + t.carryCapacity + " " + t.harvestPower + " " + t.chopPower + " " + t.carryPlum + " " + t.carryLemon + " " + t.carryApple + " " + t.carryBanana + " " + t.carryIron + " " + t.carryWood);
+            }
+
+            writer.close();
+            System.err.println("Dumped scenario to " + filename);
+        } catch (IOException e) {
+            System.err.println("Failed to dump scenario: " + e.getMessage());
         }
     }
 
-    static double avgTreeDistToShack() {
-        if (trees.isEmpty()) return 5;
-        double sum = 0;
-        for (int[] t : trees) sum += distToShack(t[1], t[2]);
-        return sum / trees.size();
+    private void readInitialInput() {
+        try {
+            String line = reader.readLine();
+            StringTokenizer st = new StringTokenizer(line);
+            width = Integer.parseInt(st.nextToken());
+            height = Integer.parseInt(st.nextToken());
+
+            map = new String[height];
+            for (int y = 0; y < height; y++) {
+                map[y] = reader.readLine();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    static String decideTrollAction(int[] tr, int remaining, Set<String> occupied, int planters) {
-        int id = tr[0], tx = tr[1], ty = tr[2];
-        int speed = tr[3];
-        int carried = totalCarried(tr);
-        boolean earlyPlant = turn <= 25 && remaining > 50 && countTreesNearShack(4) < 6;
+    private void readTurnInput() {
+        try {
+            // Read my inventory
+            String line = reader.readLine();
+            StringTokenizer st = new StringTokenizer(line);
+            myPlums = Integer.parseInt(st.nextToken());
+            myLemons = Integer.parseInt(st.nextToken());
+            myApples = Integer.parseInt(st.nextToken());
+            myBananas = Integer.parseInt(st.nextToken());
+            myIron = Integer.parseInt(st.nextToken());
+            myWood = Integer.parseInt(st.nextToken());
 
-        // 1. On tree with fruits and have capacity → HARVEST
-        int[] tree = treeAt(tx, ty);
-        if (tree != null && tree[5] > 0 && remainCap(tr) > 0) {
-            return "HARVEST " + id;
+            // Read opponent inventory
+            line = reader.readLine();
+            st = new StringTokenizer(line);
+            oppPlums = Integer.parseInt(st.nextToken());
+            oppLemons = Integer.parseInt(st.nextToken());
+            oppApples = Integer.parseInt(st.nextToken());
+            oppBananas = Integer.parseInt(st.nextToken());
+            oppIron = Integer.parseInt(st.nextToken());
+            oppWood = Integer.parseInt(st.nextToken());
+
+            // Read trees
+            trees.clear();
+            int treeCount = Integer.parseInt(reader.readLine());
+            for (int i = 0; i < treeCount; i++) {
+                line = reader.readLine();
+                st = new StringTokenizer(line);
+                String type = st.nextToken();
+                int x = Integer.parseInt(st.nextToken());
+                int y = Integer.parseInt(st.nextToken());
+                int size = Integer.parseInt(st.nextToken());
+                int health = Integer.parseInt(st.nextToken());
+                int fruits = Integer.parseInt(st.nextToken());
+                int cooldown = Integer.parseInt(st.nextToken());
+                trees.add(new Tree(type, x, y, size, health, fruits, cooldown));
+            }
+
+            // Read trolls
+            myTrolls.clear();
+            oppTrolls.clear();
+            int trollCount = Integer.parseInt(reader.readLine());
+            for (int i = 0; i < trollCount; i++) {
+                line = reader.readLine();
+                st = new StringTokenizer(line);
+                int id = Integer.parseInt(st.nextToken());
+                int player = Integer.parseInt(st.nextToken());
+                int x = Integer.parseInt(st.nextToken());
+                int y = Integer.parseInt(st.nextToken());
+                int movementSpeed = Integer.parseInt(st.nextToken());
+                int carryCapacity = Integer.parseInt(st.nextToken());
+                int harvestPower = Integer.parseInt(st.nextToken());
+                int chopPower = Integer.parseInt(st.nextToken());
+                int carryPlum = Integer.parseInt(st.nextToken());
+                int carryLemon = Integer.parseInt(st.nextToken());
+                int carryApple = Integer.parseInt(st.nextToken());
+                int carryBanana = Integer.parseInt(st.nextToken());
+                int carryIron = Integer.parseInt(st.nextToken());
+                int carryWood = Integer.parseInt(st.nextToken());
+
+                Troll troll = new Troll(id, x, y, movementSpeed, carryCapacity, harvestPower, chopPower,
+                        carryPlum, carryLemon, carryApple, carryBanana, carryIron, carryWood);
+
+                if (player == 0) {
+                    myTrolls.add(troll);
+                } else {
+                    oppTrolls.add(troll);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private String computeOutput() {
+        StringBuilder sb = new StringBuilder();
+
+        for (Troll troll : myTrolls) {
+            // If carrying something and near shack, drop
+            if (troll.getTotalCarry() > 0 && isNearShack(troll)) {
+                if (sb.length() > 0) sb.append(";");
+                sb.append("DROP ").append(troll.id);
+                continue;
+            }
+
+            // If full, return to shack
+            if (troll.getFreeCapacity() <= 0) {
+                // Find nearest path to shack
+                int[] shackPos = findMyShack();
+                if (sb.length() > 0) sb.append(";");
+                sb.append("MOVE ").append(troll.id).append(" ").append(shackPos[0]).append(" ").append(shackPos[1]);
+                continue;
+            }
+
+            // Find nearest tree with fruits
+            Tree nearestTree = findNearestTreeWithFruits(troll);
+            if (nearestTree != null) {
+                // If already at tree, harvest
+                if (troll.x == nearestTree.x && troll.y == nearestTree.y) {
+                    if (sb.length() > 0) sb.append(";");
+                    sb.append("HARVEST ").append(troll.id);
+                } else {
+                    // Move towards tree
+                    if (sb.length() > 0) sb.append(";");
+                    sb.append("MOVE ").append(troll.id).append(" ").append(nearestTree.x).append(" ").append(nearestTree.y);
+                }
+            } else {
+                // No trees with fruits, wait
+                if (sb.length() > 0) sb.append(";");
+                sb.append("WAIT");
+            }
         }
 
-        // 2. Carrying + on good empty cell near shack → PLANT
-        if (carried > 0 && earlyPlant) {
-            int dShack = distToShack(tx, ty);
-            if (dShack >= 1 && dShack <= 3 && !hasTreeAt(tx, ty) && grid[ty][tx] == 0) {
-                String ptype = bestPlantType(tr);
-                if (ptype != null) {
-                    System.err.println("T" + turn + " troll " + id + " PLANT " + ptype + " at " + tx + "," + ty);
-                    return "PLANT " + id + " " + ptype;
+        if (sb.length() == 0) {
+            sb.append("WAIT");
+        }
+
+        return sb.toString();
+    }
+
+    private int[] findMyShack() {
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                if (map[y].charAt(x) == '0') {
+                    return new int[]{x, y};
                 }
             }
         }
-
-        // 3. Adjacent to shack and carrying
-        if (adjToShack(tx, ty) && carried > 0) {
-            // Early game: if carrying exactly 1, move to plant spot instead of dropping
-            if (earlyPlant && carried == 1) {
-                int[] plantCell = findPlantableCell(occupied);
-                if (plantCell != null) {
-                    return "MOVE " + id + " " + plantCell[0] + " " + plantCell[1];
-                }
-            }
-            return "DROP " + id;
-        }
-
-        // 4. Carrying fruits → go home, optionally detour through plantable cell
-        if (carried > 0) {
-            if (earlyPlant && carried <= 2) {
-                int[] plantCell = findPlantableOnPath(tx, ty, speed, occupied);
-                if (plantCell != null) {
-                    return "MOVE " + id + " " + plantCell[0] + " " + plantCell[1];
-                }
-            }
-            int[] adj = bestAdjacentToShack(tx, ty, occupied);
-            if (adj != null) return "MOVE " + id + " " + adj[0] + " " + adj[1];
-            return "MOVE " + id + " " + myShackX + " " + myShackY;
-        }
-
-        // 5. Adjacent to shack, not carrying, early game → PICK seed to plant (max 1 planter)
-        if (adjToShack(tx, ty) && earlyPlant && planters == 0) {
-            int[] plantCell = findPlantableCell(occupied);
-            if (plantCell != null) {
-                String pickType = bestPickType();
-                if (pickType != null) {
-                    System.err.println("T" + turn + " troll " + id + " PICK " + pickType + " to plant");
-                    return "PICK " + id + " " + pickType;
-                }
-            }
-        }
-
-        // 6. Find best tree to go to
-        return findBestTree(tr, remaining, occupied);
+        return new int[]{0, 0};
     }
 
-    static int[] findPlantableCell(Set<String> occupied) {
-        for (int d = 1; d <= 2; d++) {
-            for (int dx = -d; dx <= d; dx++) {
-                for (int dy = -d; dy <= d; dy++) {
-                    if (Math.abs(dx) + Math.abs(dy) != d) continue;
-                    int x = myShackX + dx, y = myShackY + dy;
-                    if (x >= 0 && x < width && y >= 0 && y < height
-                            && grid[y][x] == 0 && !hasTreeAt(x, y)
-                            && !occupied.contains(x + "," + y)) {
-                        return new int[]{x, y};
-                    }
-                }
-            }
-        }
-        return null;
+    private boolean isNearShack(Troll troll) {
+        int[] shack = findMyShack();
+        int dx = Math.abs(troll.x - shack[0]);
+        int dy = Math.abs(troll.y - shack[1]);
+        return (dx + dy) <= 1;
     }
 
-    static String bestPickType() {
-        String[] names = {"PLUM", "LEMON", "APPLE", "BANANA"};
-        int bestType = -1; int minCount = Integer.MAX_VALUE;
-        for (int type = 0; type < 4; type++) {
-            if (myInv[type] >= 3) { // only pick if we have plenty
-                int count = 0;
-                for (int[] t : trees) if (t[0] == type && distToShack(t[1], t[2]) <= 4) count++;
-                if (count < minCount) { minCount = count; bestType = type; }
-            }
-        }
-        return bestType >= 0 ? names[bestType] : null;
-    }
+    private Tree findNearestTreeWithFruits(Troll troll) {
+        Tree best = null;
+        int bestDist = Integer.MAX_VALUE;
 
-    static String bestPlantType(int[] tr) {
-        String[] names = {"PLUM", "LEMON", "APPLE", "BANANA"};
-        int bestType = -1; int minCount = Integer.MAX_VALUE;
-        for (int type = 0; type < 4; type++) {
-            if (tr[7 + type] > 0) {
-                int count = 0;
-                for (int[] t : trees) if (t[0] == type && distToShack(t[1], t[2]) <= 4) count++;
-                if (count < minCount) { minCount = count; bestType = type; }
-            }
-        }
-        return bestType >= 0 ? names[bestType] : null;
-    }
-
-    static int[] findPlantableOnPath(int fromX, int fromY, int speed, Set<String> occupied) {
-        int directDist = distToShack(fromX, fromY);
-        int[] best = null; int bestDetour = Integer.MAX_VALUE;
-        for (int d = 1; d <= 2; d++) {
-            for (int dx = -d; dx <= d; dx++) {
-                for (int dy = -d; dy <= d; dy++) {
-                    if (Math.abs(dx) + Math.abs(dy) != d) continue;
-                    int x = myShackX + dx, y = myShackY + dy;
-                    if (x < 0 || x >= width || y < 0 || y >= height) continue;
-                    if (grid[y][x] != 0 || hasTreeAt(x, y)) continue;
-                    if (occupied.contains(x + "," + y)) continue;
-                    int totalPath = dist(fromX, fromY, x, y) + d;
-                    int detour = totalPath - directDist;
-                    if (detour <= 2 && detour < bestDetour) {
-                        bestDetour = detour; best = new int[]{x, y};
-                    }
+        for (Tree tree : trees) {
+            if (tree.fruits > 0) {
+                int dist = Math.abs(troll.x - tree.x) + Math.abs(troll.y - tree.y);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = tree;
                 }
             }
         }
         return best;
     }
 
-    static int countTreesNearShack(int maxDist) {
-        int count = 0;
-        for (int[] t : trees) if (distToShack(t[1], t[2]) <= maxDist) count++;
-        return count;
+    // Helper classes
+    static class Tree {
+        String type;
+        int x, y, size, health, fruits, cooldown;
+
+        Tree(String type, int x, int y, int size, int health, int fruits, int cooldown) {
+            this.type = type;
+            this.x = x;
+            this.y = y;
+            this.size = size;
+            this.health = health;
+            this.fruits = fruits;
+            this.cooldown = cooldown;
+        }
     }
 
-    static String findBestTree(int[] tr, int remaining, Set<String> occupied) {
-        int id = tr[0], tx = tr[1], ty = tr[2], speed = tr[3];
-        int cap = tr[4], hp = tr[5];
+    static class Troll {
+        int id, x, y;
+        int movementSpeed, carryCapacity, harvestPower, chopPower;
+        int carryPlum, carryLemon, carryApple, carryBanana, carryIron, carryWood;
 
-        double bestValue = -1;
-        int[] bestTree = null;
-
-        for (int[] tree : trees) {
-            String key = tree[1] + "," + tree[2];
-            // Skip if another troll is already on/heading to this cell
-            if (occupied.contains(key)) continue;
-
-            int fruits = tree[5];
-            int cooldown = tree[6];
-            int size = tree[3];
-            
-            int dToTree = dist(tx, ty, tree[1], tree[2]);
-            int turnsToArrive = (int) Math.ceil((double) dToTree / speed);
-            
-            int availFruits = fruits;
-            if (size == 4 && cooldown > 0 && cooldown <= turnsToArrive) {
-                availFruits = Math.min(3, fruits + 1);
-            }
-            if (availFruits == 0 && size == 4 && cooldown <= turnsToArrive + 2) {
-                availFruits = 1;
-            }
-            
-            if (availFruits <= 0) continue;
-
-            int harvestable = Math.min(availFruits, Math.min(cap, hp));
-            int dBack = distToShack(tree[1], tree[2]);
-            double cycleTime = (double) dToTree / speed + 1 + (double) dBack / speed + 1;
-            if (cycleTime < 1) cycleTime = 1;
-
-            if (turnsToArrive + 1 + Math.ceil((double) dBack / speed) + 1 > remaining) continue;
-
-            double value = harvestable / cycleTime;
-            
-            int oppDist = dist(tree[1], tree[2], oppShackX, oppShackY);
-            if (dBack < oppDist) value *= 1.15;
-
-            if (value > bestValue) {
-                bestValue = value;
-                bestTree = tree;
-            }
+        Troll(int id, int x, int y, int movementSpeed, int carryCapacity, int harvestPower, int chopPower,
+              int carryPlum, int carryLemon, int carryApple, int carryBanana, int carryIron, int carryWood) {
+            this.id = id;
+            this.x = x;
+            this.y = y;
+            this.movementSpeed = movementSpeed;
+            this.carryCapacity = carryCapacity;
+            this.harvestPower = harvestPower;
+            this.chopPower = chopPower;
+            this.carryPlum = carryPlum;
+            this.carryLemon = carryLemon;
+            this.carryApple = carryApple;
+            this.carryBanana = carryBanana;
+            this.carryIron = carryIron;
+            this.carryWood = carryWood;
         }
 
-        if (bestTree != null) {
-            return "MOVE " + id + " " + bestTree[1] + " " + bestTree[2];
+        int getTotalCarry() {
+            return carryPlum + carryLemon + carryApple + carryBanana + carryIron + carryWood;
         }
 
-        // No good tree found - consider going to a tree that will produce soon
-        for (int[] tree : trees) {
-            if (tree[3] == 4 && tree[6] <= 5) {
-                String key = tree[1] + "," + tree[2];
-                if (!occupied.contains(key)) {
-                    return "MOVE " + id + " " + tree[1] + " " + tree[2];
-                }
-            }
+        int getFreeCapacity() {
+            return carryCapacity - getTotalCarry();
         }
-
-        // Nothing to do, move toward map center
-        return "MOVE " + id + " " + (width / 2) + " " + (height / 2);
-    }
-
-    static int[] bestAdjacentToShack(int fromX, int fromY, Set<String> occupied) {
-        int[] best = null; int bestDist = Integer.MAX_VALUE;
-        int[][] dirs = {{0,1},{0,-1},{1,0},{-1,0}};
-        for (int[] d : dirs) {
-            int ax = myShackX + d[0], ay = myShackY + d[1];
-            if (ax >= 0 && ax < width && ay >= 0 && ay < height && grid[ay][ax] == 0
-                    && !occupied.contains(ax + "," + ay)) {
-                int dd = dist(fromX, fromY, ax, ay);
-                if (dd < bestDist) { bestDist = dd; best = new int[]{ax, ay}; }
-            }
-        }
-        return best;
     }
 }

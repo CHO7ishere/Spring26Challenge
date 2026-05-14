@@ -126,3 +126,74 @@ Note: you will only lose the game when you exceed the time limit 3 times by at m
 The game ends after 300 turns, when either player can enforce a win by doing nothing or when there are no trees on the map for 10 consecutive turns.
 8 ≤ height ≤ 11
 width = 2 * height
+
+League System
+The game has 4 leagues with different features available:
+
+League 1 (Bronze):
+- 100 turns max
+- No IRON, ROCK, or WATER on map
+- Only MOVE, HARVEST, DROP, WAIT commands available
+- Starting troll: movementSpeed=1, carryCapacity=1, harvestPower=1, chopPower=0
+
+League 2 (Silver):
+- 300 turns max
+- No IRON or WATER on map
+- TRAIN, PLANT, PICK commands available
+- Starting troll: movementSpeed=1, carryCapacity=1, harvestPower=1, chopPower=0
+
+League 3 (Gold):
+- 300 turns max
+- Full map with WATER, IRON, ROCK
+- All commands available including CHOP and MINE
+- Starting troll: movementSpeed=1, carryCapacity=1, harvestPower=1, chopPower=1
+
+League 4 (Legend):
+- Same as Gold but harder opponents
+
+Action Priorities (turn order within a game tick)
+1. MOVE - trolls move towards their target
+2. HARVEST - all harvest actions resolved simultaneously
+3. PLANT - all plant actions resolved simultaneously
+4. CHOP - all chop actions resolved simultaneously
+5. PICK - all pick actions resolved simultaneously
+6. TRAIN - new troll spawned at shack
+7. DROP - all carried items transferred to shack
+8. MINE - iron collected from adjacent cells
+9. Grow trees - trees grow/produce fruits
+
+When multiple trolls perform the same action on the same tree/cell simultaneously:
+- Resources are shared one at a time
+- If there's an odd number of resources, the last one gets duplicated so both/all trolls get it
+
+Training Cost Formula
+Cost = (number of existing trolls) + (attribute value)^2
+
+For league < 3, chopPower costs 0 (not available).
+
+Map Generation
+- Height: random between 8-11 (fixed at 8 for leagues 1-2)
+- Width: 2 * height
+- Rivers: 2-3 rivers (leagues 3+ only)
+- Iron cells: 1-2 (league 3+ only)
+- Rock cells: 1-10
+- Trees: 1-3 of each type (PLUM, LEMON, APPLE, BANANA)
+- Starting resources: random 2-10 of each type (league 2+)
+- Map is symmetric (mirrored)
+- Player 0 shack on left side, Player 1 shack on right side (mirrored)
+
+Input/Output Details
+First line of each turn output: single line with all commands separated by semicolons
+Example: "MOVE 0 5 3;HARVEST 0" or just "WAIT"
+
+For PICK command, type must be: PLUM, LEMON, APPLE, BANANA, IRON, or WOOD
+For PLANT command, type must be: PLUM, LEMON, APPLE, or BANANA (not IRON or WOOD)
+
+Troll can only perform ONE action per turn. If multiple commands reference the same troll, only the first (by priority order) is executed.
+
+Codingame Implementation Requirements
+- Class must be named exactly "Player"
+- Must extend the appropriate base class (check Codingame SDK)
+- Must implement getOutput() method that returns a String
+- Must handle stdin/stdout for communication
+- The code should be self-contained (no external dependencies beyond standard library + Codingame SDK)
